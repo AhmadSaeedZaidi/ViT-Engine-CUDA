@@ -8,6 +8,8 @@ at::Tensor pos_encoding(at::Tensor patches, at::Tensor cls_token, at::Tensor pos
 std::vector<at::Tensor> mlp_forward(at::Tensor X, at::Tensor W1, at::Tensor B1, at::Tensor W2, at::Tensor B2);
 at::Tensor layernorm_forward(at::Tensor X, at::Tensor gamma, at::Tensor beta, float eps);
 at::Tensor classifier_forward(at::Tensor X, at::Tensor W, at::Tensor bias);
+std::vector<at::Tensor> qkv_proj(at::Tensor X, at::Tensor W, at::Tensor B);
+at::Tensor gemm_bias(at::Tensor X, at::Tensor W, at::Tensor B);
 
 PYBIND11_MODULE(vit_cuda, m) {
     m.doc() = "vit_cuda extension (Flash Attention 2 implemented)";
@@ -17,4 +19,6 @@ PYBIND11_MODULE(vit_cuda, m) {
     m.def("mlp_forward", &mlp_forward, "Fused MLP Block (GEMM + bias + GeLU)");
     m.def("layernorm_forward", &layernorm_forward, "Fused LayerNorm forward pass");
     m.def("classifier_forward", &classifier_forward, "Fused classifier forward pass");
+    m.def("qkv_proj", &qkv_proj, "QKV projection (CUDA)");
+    m.def("gemm_bias", &gemm_bias, "General GEMM with bias (CUDA)");
 }

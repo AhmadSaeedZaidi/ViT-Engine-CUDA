@@ -8,8 +8,7 @@ torch.backends.cudnn.allow_tf32 = False
 from inference import ViTCUDA
 
 
-def measure_latency(model, inp, iterations=100, warmup=10):
-    # ensure model on eval and CUDA
+def measure_latency(model, inp, iterations=50, warmup=10):
     model.eval()
     with torch.no_grad():
         for _ in range(warmup):
@@ -28,9 +27,10 @@ def measure_latency(model, inp, iterations=100, warmup=10):
         torch.cuda.synchronize()
         times.append(starter.elapsed_time(ender))
 
-    # times in milliseconds
+    times.sort()
+    best_ms = times[0]
     avg_ms = sum(times) / len(times)
-    return avg_ms
+    return best_ms, avg_ms
 
 
 def main():
@@ -45,13 +45,13 @@ def main():
     vit = ViTCUDA().to(device).eval()
 
     print('Warming and measuring...')
-    ref_ms = measure_latency(ref, inp, iterations=100, warmup=10)
-    vit_ms = measure_latency(vit, inp, iterations=100, warmup=10)
+    ref_best, ref_avg = measure_latency(ref, inp, iterations=50, warmup=10)
+    vit_best, vit_avg = measure_latency(vit, inp, iterations=50, warmup=10)
 
-    print(f'Reference timm ViT average latency: {ref_ms:.3f} ms')
-    print(f'ViTCUDA average latency: {vit_ms:.3f} ms')
-    if vit_ms > 0:
-        print(f'Speedup (timm / vit_cuda): {ref_ms / vit_ms:.2f}x')
+    print(f'Reference timm ViT best latency: {ref_best:.3f} ms (avg: {ref_avg:.3f} ms)')
+    print(f'ViTCUDA best latency: {vit_best:.3f} ms (avg: {vit_avg:.3f} ms)')
+    if vit_best > 0:
+        print(f'Speedup (timm / vit_cuda): {ref_best / vit_best:.2f}x')
 
 
 if __name__ == '__main__':

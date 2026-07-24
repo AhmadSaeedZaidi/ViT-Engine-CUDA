@@ -11,3 +11,5 @@ data/
 *.JPEG
 data/*
 data/imagenette2-320/
+GEMINI.md
+.venv/

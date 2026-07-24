@@ -48,7 +48,7 @@ def main():
     print('Repository root:', repo_root)
     print('Python executable:', sys.executable)
     # Ensure kernel tests run: enable all kernels by default for test_all
-    os.environ['KERNELS'] = os.environ.get('KERNELS', 'patch_embed,pos_encoding')
+    os.environ['KERNELS'] = os.environ.get('KERNELS', 'patch_embed,pos_encoding,qkv,gemm_bias')
     print('KERNELS=', os.environ['KERNELS'])
 
     # 1) Build/install extension so tests import the latest .pyd

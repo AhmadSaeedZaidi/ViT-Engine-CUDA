@@ -4,7 +4,6 @@ import urllib.request
 import json
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
@@ -41,17 +40,10 @@ class ViTBlockCUDA(nn.Module):
         residual = x
         x = vit_cuda.layernorm_forward(x, self.norm1_gamma, self.norm1_beta, eps)
 
-        # qkv projection: result is [B, N, 3*E]
-        qkv = F.linear(x, self.qkv_weight, self.qkv_bias)
-        B, N, threeE = qkv.shape
-        E = threeE // 3
-        qkv = qkv.view(B, N, 3, E).contiguous()
-        q = qkv[:, :, 0, :]
-        k = qkv[:, :, 1, :]
-        v = qkv[:, :, 2, :]
+        q, k, v = vit_cuda.qkv_proj(x, self.qkv_weight, self.qkv_bias)
 
         attn_out = vit_cuda.flash_attn_2(q, k, v, scale)
-        attn_out = F.linear(attn_out, self.proj_weight, self.proj_bias)
+        attn_out = vit_cuda.gemm_bias(attn_out, self.proj_weight, self.proj_bias)
         
         x = residual + attn_out
         residual = x
@@ -63,7 +55,6 @@ class ViTBlockCUDA(nn.Module):
             self.fc1_weight, self.fc1_bias, 
             self.fc2_weight, self.fc2_bias
         )
-        # wrapper returns [O, H]
         mlp_out = mlp_out_list[0]
         
         return residual + mlp_out

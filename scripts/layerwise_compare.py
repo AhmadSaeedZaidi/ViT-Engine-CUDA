@@ -184,7 +184,8 @@ def main():
 
         # QKV projection
         t_qkv = F.linear(t_norm1, block_t.attn.qkv.weight, block_t.attn.qkv.bias)
-        v_qkv = F.linear(v_norm1, block_v.qkv_weight, block_v.qkv_bias)
+        v_q, v_k, v_v = vit_cuda.qkv_proj(v_norm1, block_v.qkv_weight, block_v.qkv_bias)
+        v_qkv = torch.cat([v_q, v_k, v_v], dim=-1)
         print_cmp('qkv', t_qkv, v_qkv)
 
         # Split Q/K/V for attention
@@ -194,13 +195,6 @@ def main():
         t_q = t_qkv_view[:, :, 0, :].contiguous()
         t_k = t_qkv_view[:, :, 1, :].contiguous()
         t_v = t_qkv_view[:, :, 2, :].contiguous()
-
-        v_B, v_N, v_threeE = v_qkv.shape
-        v_E = v_threeE // 3
-        v_qkv_view = v_qkv.reshape(v_B, v_N, 3, v_E).contiguous()
-        v_q = v_qkv_view[:, :, 0, :].contiguous()
-        v_k = v_qkv_view[:, :, 1, :].contiguous()
-        v_v = v_qkv_view[:, :, 2, :].contiguous()
 
         print_cmp('q', t_q, v_q)
         print_cmp('k', t_k, v_k)
@@ -213,7 +207,7 @@ def main():
 
         # Attention projection + residual
         t_proj = F.linear(t_attn_raw, block_t.attn.proj.weight, block_t.attn.proj.bias)
-        v_proj = F.linear(v_attn_raw, block_v.proj_weight, block_v.proj_bias)
+        v_proj = vit_cuda.gemm_bias(v_attn_raw, block_v.proj_weight, block_v.proj_bias)
         print_cmp('attn_proj', t_proj, v_proj)
 
         t_res1 = x_t_cur + t_proj
@@ -227,7 +221,7 @@ def main():
 
         # MLP substeps
         t_mlp_fc1 = block_t.mlp.fc1(t_norm2)
-        v_mlp_fc1 = F.linear(t_norm2, block_v.fc1_weight, block_v.fc1_bias)
+        v_mlp_fc1 = vit_cuda.gemm_bias(t_norm2, block_v.fc1_weight, block_v.fc1_bias)
         print_cmp('mlp_fc1', t_mlp_fc1, v_mlp_fc1)
 
         t_mlp_act = block_t.mlp.act(t_mlp_fc1)

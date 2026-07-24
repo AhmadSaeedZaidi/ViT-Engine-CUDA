@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <math.h>
+#include "float4_utils.cuh"
 
 #define IMG_SIZE 224
 #define PATCH_SIZE 16
@@ -24,7 +25,7 @@ __global__ void patch_embed_kernel(const float* __restrict__ img, const float* _
     int batch_idx = blockIdx.y;
     int tid = threadIdx.x; // 0 to 191
 
-    // 192 float4s = 768 floats
+    // 192 float4s = 768 floats (use float4 for shared memory to avoid non-trivial constructor)
     __shared__ float4 patch_s[192];
 
     // Top-left corner of the patch in the original image (y,x)
@@ -43,7 +44,7 @@ __global__ void patch_embed_kernel(const float* __restrict__ img, const float* _
     int global_offset = c * IMG_SIZE * IMG_SIZE + (patch_row + py) * IMG_SIZE + (patch_col + px_vec * 4);
     
     // Load 1 float4 (16 bytes) cohesively per thread
-    patch_s[tid] = reinterpret_cast<const float4*>(batch_img + global_offset)[0];
+    patch_s[tid] = Vec4::from_float4(reinterpret_cast<const float4*>(batch_img + global_offset)[0]);
 
     __syncthreads();
 
@@ -60,7 +61,8 @@ __global__ void patch_embed_kernel(const float* __restrict__ img, const float* _
         // Each warp computes 4 output dimensions in this iteration
         int out_dim_base = iter * 24 + warp_id * 4;
         
-        float4 sum = {0.0f, 0.0f, 0.0f, 0.0f};
+        // 4 output accumulators (one per output dimension)
+        Vec4 sum;
 
         // Warp loops over the 192 float4s of the patch.
         // 192 / 32 = 6 float4s per thread
@@ -68,34 +70,18 @@ __global__ void patch_embed_kernel(const float* __restrict__ img, const float* _
         
         #pragma unroll
         for (int step = 0; step < 6; step++) {
-            int i = step * 32 + lane_id; // float4 index
-            float4 p = patch_s[i];
+            int i = step * 32 + lane_id;
+            Vec4 p = Vec4::from_float4(patch_s[i]);
             
-            // Fully coalesced loads from global memory!
-            float4 w0 = w_base[ (out_dim_base + 0) * 192 + i ];
-            float4 w1 = w_base[ (out_dim_base + 1) * 192 + i ];
-            float4 w2 = w_base[ (out_dim_base + 2) * 192 + i ];
-            float4 w3 = w_base[ (out_dim_base + 3) * 192 + i ];
+            Vec4 w0 = Vec4::from_float4(w_base[(out_dim_base + 0) * 192 + i]);
+            Vec4 w1 = Vec4::from_float4(w_base[(out_dim_base + 1) * 192 + i]);
+            Vec4 w2 = Vec4::from_float4(w_base[(out_dim_base + 2) * 192 + i]);
+            Vec4 w3 = Vec4::from_float4(w_base[(out_dim_base + 3) * 192 + i]);
             
-            sum.x = __fmaf_rn(p.x, w0.x, sum.x);
-            sum.x = __fmaf_rn(p.y, w0.y, sum.x);
-            sum.x = __fmaf_rn(p.z, w0.z, sum.x);
-            sum.x = __fmaf_rn(p.w, w0.w, sum.x);
-
-            sum.y = __fmaf_rn(p.x, w1.x, sum.y);
-            sum.y = __fmaf_rn(p.y, w1.y, sum.y);
-            sum.y = __fmaf_rn(p.z, w1.z, sum.y);
-            sum.y = __fmaf_rn(p.w, w1.w, sum.y);
-
-            sum.z = __fmaf_rn(p.x, w2.x, sum.z);
-            sum.z = __fmaf_rn(p.y, w2.y, sum.z);
-            sum.z = __fmaf_rn(p.z, w2.z, sum.z);
-            sum.z = __fmaf_rn(p.w, w2.w, sum.z);
-
-            sum.w = __fmaf_rn(p.x, w3.x, sum.w);
-            sum.w = __fmaf_rn(p.y, w3.y, sum.w);
-            sum.w = __fmaf_rn(p.z, w3.z, sum.w);
-            sum.w = __fmaf_rn(p.w, w3.w, sum.w);
+            sum.x += p.dot(w0);
+            sum.y += p.dot(w1);
+            sum.z += p.dot(w2);
+            sum.w += p.dot(w3);
         }
 
         sum.x = warp_reduce_sum(sum.x);

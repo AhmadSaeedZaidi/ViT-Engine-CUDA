@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include "float4_utils.cuh"
 
 #define SEQ_LEN 197
 #define EMBED_DIM 768
@@ -50,14 +51,10 @@ __global__ void classifier_kernel(const float* __restrict__ X, const float* __re
     const float4* x_vec = reinterpret_cast<const float4*>(&X[x_offset]);
     const float4* w_vec = reinterpret_cast<const float4*>(&W[w_offset]);
 
-    float4 x_val = x_vec[0];
-    float4 w_val = w_vec[0];
+    Vec4 x_val = Vec4::from_float4(x_vec[0]);
+    Vec4 w_val = Vec4::from_float4(w_vec[0]);
 
-    float sum = 0.0f;
-    sum = __fmaf_rn(x_val.x, w_val.x, sum);
-    sum = __fmaf_rn(x_val.y, w_val.y, sum);
-    sum = __fmaf_rn(x_val.z, w_val.z, sum);
-    sum = __fmaf_rn(x_val.w, w_val.w, sum);
+    float sum = x_val.dot(w_val);
 
     // Sum across all 192 threads in the block to get the full dot product
     sum = block_reduce_sum(sum);
