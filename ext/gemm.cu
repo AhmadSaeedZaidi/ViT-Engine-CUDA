@@ -96,28 +96,48 @@ __global__ void gemm_kernel(
 }
 
 void launch_gemm_bias(
-    const float* X, const float* W, const float* B,
-    float* Y, int M, int K, int N_out
+    const float* X,
+    const float* W,
+    const float* B,
+    float* Y,
+    int M,
+    int K,
+    int N_out,
+    cudaStream_t stream
 ) {
     dim3 block(256);
-    dim3 grid((N_out + TILE - 1) / TILE, (M + TILE - 1) / TILE);
-    gemm_kernel<true, false><<<grid, block>>>(X, W, B, Y, M, K, N_out);
+    dim3 grid(
+        (N_out + TILE - 1) / TILE,
+         (M + TILE - 1) / TILE
+        );
+    gemm_kernel<true, false><<<grid, block, 0, stream>>>(X, W, B, Y, M, K, N_out);
 }
 
 void launch_gemm(
-    const float* X, const float* W,
-    float* Y, int M, int K, int N_out
+    const float* X,
+    const float* W,
+    float* Y,
+    int M,
+    int K,
+    int N_out,
+    cudaStream_t stream
 ) {
     dim3 block(256);
     dim3 grid((N_out + TILE - 1) / TILE, (M + TILE - 1) / TILE);
-    gemm_kernel<false, false><<<grid, block>>>(X, W, nullptr, Y, M, K, N_out);
+    gemm_kernel<false, false><<<grid, block, 0, stream>>>(X, W, nullptr, Y, M, K, N_out);
 }
 
 void launch_gemm_gelu(
-    const float* X, const float* W, const float* B,
-    float* Y, int M, int K, int N_out
+    const float* X,
+    const float* W,
+    const float* B,
+    float* Y,
+    int M,
+    int K,
+    int N_out,
+    cudaStream_t stream
 ) {
     dim3 block(256);
     dim3 grid((N_out + TILE - 1) / TILE, (M + TILE - 1) / TILE);
-    gemm_kernel<true, true><<<grid, block>>>(X, W, B, Y, M, K, N_out);
+    gemm_kernel<true, true><<<grid, block, 0, stream>>>(X, W, B, Y, M, K, N_out);
 }

@@ -97,9 +97,14 @@ __global__ void patch_embed_kernel(const float* __restrict__ img, const float* _
     }
 }
 
-void launch_patch_embed(float* img, float* weights, float* out, int B) {
-    dim3 grid(196, B); 
-    dim3 block(192); // Optimally reduced to exactly 192 threads
-    // Overall input image is [B][3][224][224] and weights are [768][768], output is [B][196][768]
-    patch_embed_kernel<<<grid, block>>>(img, weights, out);
+void launch_patch_embed(
+    float* img,
+    float* weights,
+    float* out,
+    int B,
+    cudaStream_t stream
+) {
+    dim3 grid(196, B);
+    dim3 block(192);
+    patch_embed_kernel<<<grid, block, 0, stream>>>(img, weights, out);
 }

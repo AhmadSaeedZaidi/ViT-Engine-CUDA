@@ -205,15 +205,22 @@ __global__ void flash_attn_2_forward(
     }
 }
 
-void flash_attn_2_forward_cuda(const float* Q, const float* K, const float* V, float* O, int B, int N, float scale) {
+void flash_attn_2_forward_cuda(
+    const float* Q,
+    const float* K,
+    const float* V,
+    float* O,
+    int B,
+    int N,
+    float scale,
+    cudaStream_t stream
+) {
     dim3 grid(B * H_DIM, (N + BR - 1) / BR);
     dim3 block(THREADS_PER_BLOCK);
 
-    // Always allocate max shared memory (4 tiles) to support both arch paths.
-    // __CUDA_ARCH__ is not available in host code, so we can't conditionally size.
     size_t shared_mem_size = 4 * BC * VECS_PER_ROW * sizeof(float4);
-    
-    flash_attn_2_forward<<<grid, block, shared_mem_size>>>(
+
+    flash_attn_2_forward<<<grid, block, shared_mem_size, stream>>>(
         Q, K, V, O, B, N, scale
     );
 }

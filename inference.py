@@ -60,12 +60,15 @@ class ViTBlockCUDA(nn.Module):
         return residual + mlp_out
 
 class ViTCUDA(nn.Module):
-    def __init__(self, num_classes=1000):
+    def __init__(self, num_classes=1000, state_dict=None, pretrained=True):
         super().__init__()
         
-        # Load pre-trained weights from standard timm model
-        model = timm.create_model('vit_base_patch16_224', pretrained=True)
-        state = model.state_dict()
+        # Load pre-trained weights from standard timm model (or use caller-supplied state)
+        if state_dict is None:
+            model = timm.create_model('vit_base_patch16_224', pretrained=pretrained)
+            state = model.state_dict()
+        else:
+            state = state_dict
         
         self.num_classes = num_classes
         self.scale = 1.0 / math.sqrt(64)
@@ -88,6 +91,14 @@ class ViTCUDA(nn.Module):
         self.register_buffer('head_bias', state['head.bias'])
 
     def forward(self, x):
+        # CUDA graph replay path (fixed input shape/address)
+        if getattr(self, '_graph', None) is not None:
+            self._static_input.copy_(x)
+            self._graph.replay()
+            return self._static_output
+        return self._forward_impl(x)
+
+    def _forward_impl(self, x):
         # reshape patch conv weights -> [embed_dim, patch_volume]
         pw = self.patch_weight
         if pw.dim() == 4:
@@ -105,14 +116,54 @@ class ViTCUDA(nn.Module):
         cls_b = cls.expand(B, -1).contiguous()
 
         x = vit_cuda.pos_encoding(x, cls_b, self.pos_embed)
-        
+
         for block in self.blocks:
             x = block(x, self.scale, self.eps)
-            
+
         x = vit_cuda.layernorm_forward(x, self.norm_gamma, self.norm_beta, self.eps)
         out = vit_cuda.classifier_forward(x, self.head_weight, self.head_bias)
-        
+
         return out
+
+    def capture_graph(self, static_input, num_warmup=3):
+        """Capture the full forward pass as a CUDA graph.
+
+        Must be called on an already-trained, eval-mode model. `static_input`
+        is a CUDA float32 tensor of the exact shape the graph will replay; its
+        storage is used as the graph's input buffer, so keep a reference.
+
+        After capture, `model(x)` copies `x` into the static input and replays
+        the graph. Shapes and device of `x` must match `static_input`.
+        """
+        if not static_input.is_cuda:
+            raise RuntimeError("capture_graph: static_input must be a CUDA tensor")
+        if static_input.dtype != torch.float32:
+            raise RuntimeError("capture_graph: static_input must be float32")
+        if getattr(self, '_graph', None) is not None:
+            raise RuntimeError("capture_graph: a graph is already captured")
+
+        static_input = static_input.contiguous()
+        self.eval()
+
+        # Warm up on a side stream so kernels are JIT'd and the caching
+        # allocator's graph memory pool is populated before capture begins.
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            with torch.no_grad():
+                for _ in range(num_warmup):
+                    self._forward_impl(static_input)
+        torch.cuda.current_stream().wait_stream(s)
+        torch.cuda.synchronize()
+
+        # Capture on the current stream.
+        self._graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self._graph):
+            with torch.no_grad():
+                self._static_output = self._forward_impl(static_input)
+        self._static_input = static_input
+        torch.cuda.synchronize()
+        return self._graph
 
 def get_imagenet_labels():
     url = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json"

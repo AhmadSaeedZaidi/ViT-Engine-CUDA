@@ -36,19 +36,16 @@ def test_qkv_proj_correctness():
 
     q, k, v = vit_cuda.qkv_proj(X, W, B)
 
-    assert q.shape == (B, N, E)
-    assert k.shape == (B, N, E)
-    assert v.shape == (B, N, E)
+    qc, kc, vc = q.cpu(), k.cpu(), v.cpu()
 
-    qkv_reference = F.linear(X_cpu, W_cpu, B_cpu)
-    qkv_reference = qkv_reference.view(B, N, 3, E)
-    q_expected = qkv_reference[:, :, 0, :].contiguous()
-    k_expected = qkv_reference[:, :, 1, :].contiguous()
-    v_expected = qkv_reference[:, :, 2, :].contiguous()
+    qkv_ref = X_cpu.matmul(W_cpu.t()) + B_cpu
+    q_ref = qkv_ref[:, :, 0:768]
+    k_ref = qkv_ref[:, :, 768:1536]
+    v_ref = qkv_ref[:, :, 1536:2304]
 
-    assert torch.allclose(q, q_expected, atol=1e-4)
-    assert torch.allclose(k, k_expected, atol=1e-4)
-    assert torch.allclose(v, v_expected, atol=1e-4)
+    assert torch.allclose(qc, q_ref, atol=1e-4), "Q mismatch"
+    assert torch.allclose(kc, k_ref, atol=1e-4), "K mismatch"
+    assert torch.allclose(vc, v_ref, atol=1e-4), "V mismatch"
 
 
 def test_gemm_bias_correctness():
@@ -73,4 +70,4 @@ def test_gemm_bias_correctness():
 
     expected = X_cpu.matmul(W_cpu.t()) + B_cpu
 
-    assert torch.allclose(Y, expected, atol=1e-4)
+    assert bool(torch.allclose(Y.cpu(), expected, atol=1e-4))

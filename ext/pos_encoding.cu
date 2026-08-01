@@ -27,8 +27,15 @@ __global__ void pos_encoding_kernel(const float* __restrict__ patches, const flo
     }
 }
 
-void launch_pos_encoding(float* patches, float* cls_token, float* pos_embed, float* out, int batch_size) {
+void launch_pos_encoding(
+    float* patches,
+    float* cls_token,
+    float* pos_embed,
+    float* out,
+    int batch_size,
+    cudaStream_t stream
+) {
     dim3 grid(SEQ_LEN, batch_size);
     dim3 block(THREADS_PER_BLOCK);
-    pos_encoding_kernel<<<grid, block>>>(patches, cls_token, pos_embed, out);
+    pos_encoding_kernel<<<grid, block, 0, stream>>>(patches, cls_token, pos_embed, out);
 }

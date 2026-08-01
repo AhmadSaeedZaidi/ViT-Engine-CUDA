@@ -1,22 +1,25 @@
 #include <torch/extension.h>
 #include <vector>
+#include <c10/cuda/CUDAStream.h>
+#include "cuda_checks.h"
 
 void qkv_kernel_launcher(
-    const float* X, const float* W, const float* B,
-    float* Y, int M, int K, int N_out
+    const float* X,
+    const float* W,
+    const float* B,
+    float* Y,
+    int M,
+    int K,
+    int N_out,
+    cudaStream_t stream
 );
 
 std::vector<at::Tensor> qkv_proj(at::Tensor X, at::Tensor W, at::Tensor B) {
-    TORCH_CHECK(X.is_cuda(), "X must be a CUDA tensor");
-    TORCH_CHECK(W.is_cuda(), "W must be a CUDA tensor");
-    TORCH_CHECK(B.is_cuda(), "B must be a CUDA tensor");
-    TORCH_CHECK(X.scalar_type() == at::kFloat, "X must be float32");
-    TORCH_CHECK(W.scalar_type() == at::kFloat, "W must be float32");
-    TORCH_CHECK(B.scalar_type() == at::kFloat, "B must be float32");
+    vit_checks::check_same_device({X, W, B}, "qkv_proj");
 
-    auto Xc = X.contiguous();
-    auto Wc = W.contiguous();
-    auto Bc = B.contiguous();
+    auto Xc = vit_checks::contig(X, "X");
+    auto Wc = vit_checks::contig(W, "W");
+    auto Bc = vit_checks::contig(B, "B");
 
     TORCH_CHECK(Xc.dim() == 3, "X must be [B, N, E]");
 
@@ -38,8 +41,10 @@ std::vector<at::Tensor> qkv_proj(at::Tensor X, at::Tensor W, at::Tensor B) {
         Wc.data_ptr<float>(),
         Bc.data_ptr<float>(),
         Y.data_ptr<float>(),
-        M, E, N_out
+        M, E, N_out,
+        c10::cuda::getCurrentCUDAStream()
     );
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     auto Y_reshaped = Y.view({B_batch, N, 3, E});
     auto q = Y_reshaped.select(2, 0).contiguous();

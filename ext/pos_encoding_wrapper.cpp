@@ -1,20 +1,22 @@
 #include <torch/extension.h>
+#include <c10/cuda/CUDAStream.h>
+#include "cuda_checks.h"
 
-// Forward declaration of the CUDA launcher implemented in pos_encoding.cu
-void launch_pos_encoding(float* patches, float* cls_token, float* pos_embed, float* out, int batch_size);
+void launch_pos_encoding(
+    float* patches,
+    float* cls_token,
+    float* pos_embed,
+    float* out,
+    int batch_size,
+    cudaStream_t stream
+);
 
 at::Tensor pos_encoding(at::Tensor patches, at::Tensor cls_token, at::Tensor pos_embeddings) { // Defines the C++ function accepting PyTorch tensors
-    // Pytorch checks for input validity
-	TORCH_CHECK(patches.is_cuda(), "patches must be a CUDA tensor");
-	TORCH_CHECK(cls_token.is_cuda(), "cls_token must be a CUDA tensor");
-	TORCH_CHECK(pos_embeddings.is_cuda(), "pos_embeddings must be a CUDA tensor");
-	TORCH_CHECK(patches.scalar_type() == at::kFloat, "patches must be float32");
-	TORCH_CHECK(cls_token.scalar_type() == at::kFloat, "cls_token must be float32");
-	TORCH_CHECK(pos_embeddings.scalar_type() == at::kFloat, "pos_embeddings must be float32");
+	vit_checks::check_same_device({patches, cls_token, pos_embeddings}, "pos_encoding");
 
-	at::Tensor p_c = patches.contiguous(); // Ensures the patches tensor is contiguous in memory
-	at::Tensor c_c = cls_token.contiguous(); // Ensures the cls_token tensor is contiguous in memory
-	at::Tensor pos_c = pos_embeddings.contiguous(); // Ensures the pos_embeddings tensor is contiguous in memory
+	at::Tensor p_c = vit_checks::contig(patches, "patches");
+	at::Tensor c_c = vit_checks::contig(cls_token, "cls_token");
+	at::Tensor pos_c = vit_checks::contig(pos_embeddings, "pos_embeddings");
 
 	int64_t batch_size = p_c.size(0); // Extracts the batch size
 	int64_t num_patches = p_c.size(1); // Extracts the number of patches
@@ -31,7 +33,15 @@ at::Tensor pos_encoding(at::Tensor patches, at::Tensor cls_token, at::Tensor pos
 
 	at::Tensor out = at::zeros({batch_size, num_patches + 1, embed_dim}, p_c.options()); // Creates an output tensor initialized to zeros with shape [B, SEQ_LEN, embed_dim]
 
-	launch_pos_encoding(p_c.data_ptr<float>(), c_c.data_ptr<float>(), pos_c.data_ptr<float>(), out.data_ptr<float>(), (int)batch_size); // Calls the CUDA launcher function
+	launch_pos_encoding(
+		p_c.data_ptr<float>(),
+		c_c.data_ptr<float>(),
+		pos_c.data_ptr<float>(),
+		out.data_ptr<float>(),
+		(int)batch_size,
+		c10::cuda::getCurrentCUDAStream()
+	);
+	C10_CUDA_KERNEL_LAUNCH_CHECK();
 
 	return out;
 }

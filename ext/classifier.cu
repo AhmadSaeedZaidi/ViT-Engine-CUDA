@@ -65,9 +65,16 @@ __global__ void classifier_kernel(const float* __restrict__ X, const float* __re
     }
 }
 
-void launch_classifier(const float* X, const float* W, const float* bias, float* Y, int B, int num_classes) {
-    // Grid maps Y-axis to Batch Size and X-axis to Number of Classes
+void launch_classifier(
+    const float* X,
+    const float* W,
+    const float* bias,
+    float* Y,
+    int B,
+    int num_classes,
+    cudaStream_t stream
+) {
     dim3 grid(num_classes, B);
     dim3 block(THREADS_PER_BLOCK);
-    classifier_kernel<<<grid, block>>>(X, W, bias, Y, num_classes);
+    classifier_kernel<<<grid, block, 0, stream>>>(X, W, bias, Y, num_classes);
 }

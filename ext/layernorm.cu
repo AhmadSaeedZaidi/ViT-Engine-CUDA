@@ -64,8 +64,17 @@ __global__ void layernorm_kernel(const float* __restrict__ X, const float* __res
     Y[offset] = norm_val * gamma[tid] + beta[tid];
 }
 
-void launch_layernorm(const float* X, const float* gamma, const float* beta, float* Y, int B, int N, float eps) {
+void launch_layernorm(
+    const float* X,
+    const float* gamma,
+    const float* beta,
+    float* Y,
+    int B,
+    int N,
+    float eps,
+    cudaStream_t stream
+) {
     dim3 grid(N, B);
     dim3 block(E);
-    layernorm_kernel<<<grid, block>>>(X, gamma, beta, Y, B, N, eps);
+    layernorm_kernel<<<grid, block, 0, stream>>>(X, gamma, beta, Y, B, N, eps);
 }
