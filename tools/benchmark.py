@@ -8,7 +8,7 @@ import timm
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
-from vit_cuda.model import VITCUDA
+from vit_cuda.model import ViTCUDA
 
 
 def measure_latency(model, inp, iterations=50, warmup=10, use_graph=False):
@@ -76,7 +76,6 @@ def main():
     inp = torch.randn(args.batch, 3, 224, 224, device=device, dtype=torch.float32)
 
     ref = timm.create_model("vit_base_patch16_224", pretrained=False).to(device).eval()
-    vit = ViTCUDA().to(device).eval()
 
     print("Warming and measuring...")
     ref_best, ref_avg = measure_latency(
