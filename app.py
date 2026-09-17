@@ -6,7 +6,7 @@ import gradio as gr
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
-from inference import ViTCUDA, get_imagenet_labels
+from vit_cuda.model import ViTCUDA, get_imagenet_labels
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]

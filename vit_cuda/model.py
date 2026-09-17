@@ -12,7 +12,7 @@ from torchvision import transforms
 from PIL import Image
 import timm
 
-# Import your compiled C++ extension
+# Import compiled C++ extension
 from . import _C
 
 class ViTBlockCUDA(nn.Module):
@@ -38,19 +38,19 @@ class ViTBlockCUDA(nn.Module):
 
     def forward(self, x, scale, eps):
         residual = x
-        x = vit_cuda.layernorm_forward(x, self.norm1_gamma, self.norm1_beta, eps)
+        x = _C.layernorm_forward(x, self.norm1_gamma, self.norm1_beta, eps)
 
-        q, k, v = vit_cuda.qkv_proj(x, self.qkv_weight, self.qkv_bias)
+        q, k, v = _C.qkv_proj(x, self.qkv_weight, self.qkv_bias)
 
-        attn_out = vit_cuda.flash_attn_2(q, k, v, scale)
-        attn_out = vit_cuda.gemm_bias(attn_out, self.proj_weight, self.proj_bias)
+        attn_out = _C.flash_attn_2(q, k, v, scale)
+        attn_out = _C.gemm_bias(attn_out, self.proj_weight, self.proj_bias)
 
         x = residual + attn_out
         residual = x
 
-        x = vit_cuda.layernorm_forward(x, self.norm2_gamma, self.norm2_beta, eps)
+        x = _C.layernorm_forward(x, self.norm2_gamma, self.norm2_beta, eps)
 
-        mlp_out_list = vit_cuda.mlp_forward(
+        mlp_out_list = _C.mlp_forward(
             x,
             self.fc1_weight, self.fc1_bias,
             self.fc2_weight, self.fc2_bias
@@ -106,7 +106,7 @@ class ViTCUDA(nn.Module):
         else:
             pw2 = pw
 
-        x = vit_cuda.patch_embed(x, pw2, self.patch_bias)
+        x = _C.patch_embed(x, pw2, self.patch_bias)
 
         # expand cls_token to batch size expected by pos_encoding wrapper
         B = x.size(0)
@@ -115,13 +115,13 @@ class ViTCUDA(nn.Module):
             cls = cls.unsqueeze(0)
         cls_b = cls.expand(B, -1).contiguous()
 
-        x = vit_cuda.pos_encoding(x, cls_b, self.pos_embed)
+        x = _C.pos_encoding(x, cls_b, self.pos_embed)
 
         for block in self.blocks:
             x = block(x, self.scale, self.eps)
 
-        x = vit_cuda.layernorm_forward(x, self.norm_gamma, self.norm_beta, self.eps)
-        out = vit_cuda.classifier_forward(x, self.head_weight, self.head_bias)
+        x = _C.layernorm_forward(x, self.norm_gamma, self.norm_beta, self.eps)
+        out = _C.classifier_forward(x, self.head_weight, self.head_bias)
 
         return out
 
