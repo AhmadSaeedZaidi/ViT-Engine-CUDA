@@ -1,0 +1,22 @@
+[build-system]
+requires = ["scikit-build-core>=0.8", "torch"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "vit_cuda"
+version = "0.1.0"
+description = "Hardware-accelerated custom CUDA backend for Vision Transformer"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "torch",
+    "torchvision",
+    "timm",
+]
+
+[tool.scikit-build]
+cmake.version = ">=3.18"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["vit_cuda"]
+editable.rebuild = true
+editable.mode = "redirect"
