@@ -11,7 +11,7 @@ at::Tensor classifier_forward(at::Tensor X, at::Tensor W, at::Tensor bias);
 std::vector<at::Tensor> qkv_proj(at::Tensor X, at::Tensor W, at::Tensor B);
 at::Tensor gemm_bias(at::Tensor X, at::Tensor W, at::Tensor B);
 
-PYBIND11_MODULE(vit_cuda, m) {
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.doc() = "vit_cuda extension (Flash Attention 2 implemented)";
     m.def("flash_attn_2", &flash_attn_2, "Flash Attention 2 forward pass");
     m.def("patch_embed", &patch_embed, "Patch embedding (CUDA)");

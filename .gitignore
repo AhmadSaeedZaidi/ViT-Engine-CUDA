@@ -14,3 +14,4 @@ data/imagenette2-320/
 GEMINI.md
 .venv/
 media/
+weights/

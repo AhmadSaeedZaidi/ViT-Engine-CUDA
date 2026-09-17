@@ -16,7 +16,7 @@ try:
 except Exception:
     pytest.skip('vit_cuda extension not available', allow_module_level=True)
 
-from inference import ViTCUDA
+from vit_cuda.model import ViTCUDA
 
 
 def test_end_to_end_batch_matches_timm():

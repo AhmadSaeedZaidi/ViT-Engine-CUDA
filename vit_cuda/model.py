@@ -13,24 +13,24 @@ from PIL import Image
 import timm
 
 # Import your compiled C++ extension
-import vit_cuda
+from . import _C
 
 class ViTBlockCUDA(nn.Module):
     def __init__(self, state, idx):
         super().__init__()
         prefix = f'blocks.{idx}.'
-        
+
         self.register_buffer('norm1_gamma', state[prefix + 'norm1.weight'])
         self.register_buffer('norm1_beta', state[prefix + 'norm1.bias'])
-        
+
         self.register_buffer('qkv_weight', state[prefix + 'attn.qkv.weight'])
         self.register_buffer('qkv_bias', state[prefix + 'attn.qkv.bias'])
         self.register_buffer('proj_weight', state[prefix + 'attn.proj.weight'])
         self.register_buffer('proj_bias', state[prefix + 'attn.proj.bias'])
-        
+
         self.register_buffer('norm2_gamma', state[prefix + 'norm2.weight'])
         self.register_buffer('norm2_beta', state[prefix + 'norm2.bias'])
-        
+
         self.register_buffer('fc1_weight', state[prefix + 'mlp.fc1.weight'])
         self.register_buffer('fc1_bias', state[prefix + 'mlp.fc1.bias'])
         self.register_buffer('fc2_weight', state[prefix + 'mlp.fc2.weight'])
@@ -44,36 +44,36 @@ class ViTBlockCUDA(nn.Module):
 
         attn_out = vit_cuda.flash_attn_2(q, k, v, scale)
         attn_out = vit_cuda.gemm_bias(attn_out, self.proj_weight, self.proj_bias)
-        
+
         x = residual + attn_out
         residual = x
-        
+
         x = vit_cuda.layernorm_forward(x, self.norm2_gamma, self.norm2_beta, eps)
 
         mlp_out_list = vit_cuda.mlp_forward(
-            x, 
-            self.fc1_weight, self.fc1_bias, 
+            x,
+            self.fc1_weight, self.fc1_bias,
             self.fc2_weight, self.fc2_bias
         )
         mlp_out = mlp_out_list[0]
-        
+
         return residual + mlp_out
 
 class ViTCUDA(nn.Module):
     def __init__(self, num_classes=1000, state_dict=None, pretrained=True):
         super().__init__()
-        
+
         # Load pre-trained weights from standard timm model (or use caller-supplied state)
         if state_dict is None:
             model = timm.create_model('vit_base_patch16_224', pretrained=pretrained)
             state = model.state_dict()
         else:
             state = state_dict
-        
+
         self.num_classes = num_classes
         self.scale = 1.0 / math.sqrt(64)
         self.eps = 1e-6
-        
+
         # patch projection conv weight -> reshape to [embed_dim, patch_volume] at forward time
         self.register_buffer('patch_weight', state['patch_embed.proj.weight'])
         self.register_buffer('patch_bias', state['patch_embed.proj.bias'])
@@ -81,12 +81,12 @@ class ViTCUDA(nn.Module):
         self.register_buffer('cls_token', state['cls_token'].squeeze(0))
         # pos_embed: [1, seq_len+1, E] -> [seq_len+1, E]
         self.register_buffer('pos_embed', state['pos_embed'].squeeze(0))
-        
+
         self.blocks = nn.ModuleList([ViTBlockCUDA(state, i) for i in range(12)])
-        
+
         self.register_buffer('norm_gamma', state['norm.weight'])
         self.register_buffer('norm_beta', state['norm.bias'])
-        
+
         self.register_buffer('head_weight', state['head.weight'])
         self.register_buffer('head_bias', state['head.bias'])
 
