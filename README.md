@@ -2,6 +2,11 @@
 
 A hardware-accelerated, custom CUDA backend for the Vision Transformer (ViT-Base-16). This engine achieves strict mathematical parity with the PyTorch `timm` baseline, bypassing the ATen dispatcher to execute highly tuned mathematical kernels directly on NVIDIA Ampere architecture. Final evaluation score: 199/200 on the Imagenette validation subset.
 
+An opt-in [readable CuTe TF32x3 GEMM experiment](docs/cute_tf32.md) accepts FP32
+inputs and uses Ampere Tensor Cores with residual correction. Run its focused
+GPU checks with `modal run tools/modal_cute_gemm.py`; the original FP32 GEMM
+remains the default build.
+
 ## Progress Documentation
 
 The development of this engine transitioned from individual mathematical operations to a fully integrated PyTorch extension. The progression and resolution of critical roadblocks are documented below.

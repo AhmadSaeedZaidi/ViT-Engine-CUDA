@@ -34,6 +34,13 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 # -----------------------------------------------------------------------------
 file(GLOB KERNEL_SRCS CONFIGURE_DEPENDS "csrc/kernels/*.cu")
 
+option(VIT_CUTE_TF32 "Use the experimental CuTe TF32x3 GEMM (Ampere+)" OFF)
+if(VIT_CUTE_TF32)
+    list(REMOVE_ITEM KERNEL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/gemm.cu")
+else()
+    list(REMOVE_ITEM KERNEL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/gemm_cute_tf32.cu")
+endif()
+
 add_library(vit_cuda_kernels STATIC ${KERNEL_SRCS})
 
 set_target_properties(vit_cuda_kernels PROPERTIES
@@ -54,6 +61,22 @@ target_compile_options(vit_cuda_kernels PRIVATE
 target_include_directories(vit_cuda_kernels PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/csrc/include>
 )
+
+if(VIT_CUTE_TF32)
+    # Fetch only the headers, without configuring CUTLASS's own build/tests.
+    include(FetchContent)
+    if(POLICY CMP0135)
+        cmake_policy(SET CMP0135 NEW)
+    endif()
+    FetchContent_Declare(cutlass_headers
+        URL https://codeload.github.com/NVIDIA/cutlass/tar.gz/refs/tags/v3.5.1
+        URL_HASH SHA256=20b7247cda2d257cbf8ba59ba3ca40a9211c4da61a9c9913e32b33a2c5883a36
+        SOURCE_SUBDIR include
+    )
+    FetchContent_MakeAvailable(cutlass_headers)
+    target_include_directories(vit_cuda_kernels PRIVATE "${cutlass_headers_SOURCE_DIR}/include")
+    set_property(TARGET vit_cuda_kernels PROPERTY CUDA_ARCHITECTURES "80;86")
+endif()
 
 target_link_libraries(vit_cuda_kernels PUBLIC
     CUDA::cudart
