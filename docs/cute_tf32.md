@@ -4,9 +4,11 @@
 It keeps FP32 inputs, bias, accumulators, and output, and preserves the three
 existing launcher signatures. The original FP32 kernel remains the default.
 
-The implementation intentionally uses a single shared-memory stage, scalar
-cooperative loads, and a 32 x 32 x 32 block tile with four warps. There is no
-asynchronous copy pipeline, swizzle, split-K, or autotuning.
+The implementation uses two shared-memory buffers and asynchronous prefetch
+with a 32 x 32 x 32 block tile and four warps. Aligned inputs use 16-byte
+`cp.async` copies directly from global to shared memory. Unaligned rows use
+4-byte asynchronous copies; partial tiles are zero-filled. There is no swizzle,
+split-K, or autotuning.
 
 ## Arithmetic
 
@@ -54,7 +56,7 @@ The focused adapter in `tools/gemm_probe.cu` calls the same public launchers
 as the PyTorch wrappers; it avoids depending on the older Modal runner's
 `ext/` paths or on the package's Python exports.
 
-## Measured run
+## Initial single-buffer run
 
 On 2026-11-07, an NVIDIA A10 (SM86), CUDA 12.4, and PyTorch 2.5.1 passed all
 33 focused checks. Tests cover all three launcher variants, partial M/N/K
@@ -81,6 +83,58 @@ these shapes. It is a working, readable Tensor Core example, not a performance
 replacement. The original remains the default.
 
 [Modal run and logs](https://modal.com/apps/ahmadsaeedzaidi/main/ap-hdLZf7vY51iN7kILuKiXTj)
+
+## Double buffering and overlap
+
+The single improvement is a two-stage async prefetch pipeline. Tile 0 is
+prefetched before the loop. Each iteration waits for its current tile, issues
+copies for the next tile into the other buffer, then performs the current
+TF32x3 computation. A block barrier protects the consumed buffer before reuse.
+The arithmetic, tile sizes, thread layout, and numerical tolerances are unchanged.
+
+Run the two focused tests with:
+
+```bash
+modal run tools/modal_cute_pipeline.py
+```
+
+1. `test_double_buffer_reuse` runs under Compute Sanitizer Racecheck. It covers
+   13 cases and 78 launches: odd/even tile counts, up to 33 K tiles, partial
+   M/N/K tiles, unaligned input pointers, empty dimensions, all three launcher
+   variants, and a non-default CUDA stream.
+2. `test_async_overlap` checks 128-bit `LDGSTS` instructions and PTX prefetch
+   ordering, compares results bit-for-bit with two controls, and benchmarks
+   them using interleaved CUDA Graph replay timings (median of five samples).
+
+The immediate-wait control is the same two-buffer kernel compiled with
+`-DVIT_CUTE_OVERLAP=0`: it waits immediately after prefetch instead of deferring
+the wait until the next iteration. The older single-buffer control comes from
+commit `1d5431d5bdc35b73d285f6348b81685e515073fd`. This separates the benefit of
+deferring the wait from the total change in the copy path. Instruction ordering
+and A/B timings establish a functioning overlap path; they do not measure the
+number of cycles during which memory transfer and computation overlap.
+
+On 2026-11-08, both tests passed on an A10, with **0 Racecheck hazards**.
+All benchmark outputs were bitwise equal to both controls and passed the
+existing `atol=1e-4, rtol=1e-5` check against an FP64 reference.
+
+Timings in milliseconds (bias included, GELU disabled):
+
+| M | K | N | Pipeline | Immediate wait | Previous CuTe | Speedup vs previous |
+|---:|---:|---:|---:|---:|---:|---:|
+| 8 | 768 | 3072 | 0.1232 | 0.1320 | 0.1420 | 1.15x |
+| 197 | 768 | 2304 | 0.3015 | 0.3227 | 0.3681 | 1.22x |
+| 197 | 768 | 3072 | 0.3832 | 0.3886 | 0.4461 | 1.16x |
+| 197 | 3072 | 768 | 0.5260 | 0.5416 | 0.6146 | 1.17x |
+
+Deferring the wait contributes approximately 1–7% throughput improvement over
+the immediate-wait control in this run. Results are saved to
+`build/cute_pipeline_results.json`.
+
+[Pipeline run and logs](https://modal.com/apps/ahmadsaeedzaidi/main/ap-ToUHQiQeOYhEeVXJeF91jO)
+
+See [how we noticed the bank conflicts](bank_conflicts.md) for the next issue
+identified by profiling. Swizzling remains to be implemented.
 
 ## Enable in a CMake build
 
