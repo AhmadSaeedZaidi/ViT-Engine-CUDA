@@ -50,7 +50,7 @@ def test_async_overlap():
     assert re.search(r"LDGSTS[^;\n]*\.128", sass), "16-byte asynchronous copies missing"
     assert "HMMA.1688.F32.TF32" in sass
     ptx = subprocess.check_output(["cuobjdump", "--dump-ptx", os.environ["VIT_GEMM_LIBRARY"]], text=True)
-    entry = next(part for part in ptx.split(".visible .entry ") if "gemm_tf32x3ILb1ELb0" in part[:200])
+    entry = next(part for part in ptx.split(".visible .entry ") if "gemm_emulatedILb1ELb0" in part[:200])
     wait = entry.index("cp.async.wait_group 0;")
     prefetch = entry.index("cp.async.commit_group;", wait)
     compute = entry.index("mma.sync.aligned", prefetch)

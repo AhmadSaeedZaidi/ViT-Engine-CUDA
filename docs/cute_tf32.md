@@ -1,4 +1,4 @@
-# Readable CuTe TF32x3 GEMM for Ampere
+# CuTe TF32x3 and BF16x6 GEMM for Ampere
 
 `csrc/kernels/gemm_cute_tf32.cu` is an experimental replacement for `gemm.cu`.
 It keeps FP32 inputs, bias, accumulators, and output, and preserves the three
@@ -7,12 +7,15 @@ existing launcher signatures. The original FP32 kernel remains the default.
 The implementation uses two shared-memory buffers and asynchronous prefetch
 with a 32 x 32 x 32 block tile and four warps. Aligned inputs use 16-byte
 `cp.async` copies directly from global to shared memory. Unaligned rows use
-4-byte asynchronous copies; partial tiles are zero-filled. There is no swizzle,
-split-K, or autotuning.
+4-byte asynchronous copies, and partial tiles are zero-filled.
+TF32x3 uses `Swizzle<3,2,3>` to XOR three row bits into the four-float
+group index in shared memory. BF16x6 uses `Swizzle<2,3,2>` so four rows land
+in separate eight-bank groups. The copy and MMA reads use the same layout
+for each variant. Each copy remains contiguous and 16-byte aligned.
 
 ## Arithmetic
 
-Each operand is split into two TF32 values:
+TF32x3 splits each operand into two TF32 values:
 
 ```text
 x_hi = round_tf32(x)
@@ -31,6 +34,26 @@ The low-times-low product is omitted. This improves accuracy over a single
 TF32 product but does not guarantee IEEE FP32 results or identical accumulation
 order. This experiment targets finite, ordinary inference values; subnormal,
 overflow, infinity, and NaN behavior has not been made equivalent to FP32 GEMM.
+
+BF16x6 splits each value into a high BF16 component, a rounded BF16 residual
+of the first subtraction, and a third BF16 component from the remaining
+residual. It keeps the six products with the largest significance:
+
+```text
+A_hi*B_hi
++ A_hi*B_mid + A_mid*B_hi
++ A_hi*B_lo + A_mid*B_mid + A_lo*B_hi
+```
+
+The five correction products accumulate separately from the high product.
+BF16x6 uses the SM80 m16n8k16 BF16 atom with FP32 accumulation. See
+[Henry et al. for the BF16 decomposition](https://arxiv.org/abs/1904.06376).
+
+Each BF16 MMA lane takes pairs of adjacent FP32 values from shared memory.
+The BF16 layout spreads a half warp's 16 pairs across the 32 banks, and a
+64-bit shared load issues each pair together. The three roundings use the
+packed BF16 conversion. The comparison runner builds the previous scalar
+BF16 path with `-DVIT_CUTE_BF16_PAIRS=0` for a bitwise and timing comparison.
 
 Weights stay in their PyTorch `(N, K)` layout. Input loads are zero-filled at
 the M/N/K boundaries, and output and bias accesses are individually predicated.
@@ -133,20 +156,87 @@ the immediate-wait control in this run. Results are saved to
 
 [Pipeline run and logs](https://modal.com/apps/ahmadsaeedzaidi/main/ap-ToUHQiQeOYhEeVXJeF91jO)
 
-See [how we noticed the bank conflicts](bank_conflicts.md) for the next issue
-identified by profiling. Swizzling remains to be implemented.
+See [how we noticed the bank conflicts](bank_conflicts.md) for the original
+profile. The swizzled builds can be compared on the same A10 with:
+
+```bash
+modal run tools/modal_cute_pipeline.py --compare
+```
+
+This runs the GEMM correctness suite and Racecheck on both variants. It
+compares bias GEMM with PyTorch FP32 `addmm` (TF32 disabled) and uses PyTorch
+FP64 as an accuracy reference. It also compares with the unswizzled TF32x3
+pipeline and measures shared-load bank conflicts with Nsight Compute.
+Results are saved to `build/cute_precision_results.json`.
+
+## First swizzle comparison on A10
+
+Median latency in milliseconds for seeded random FP32 inputs with bias.
+Numbers are from five interleaved CUDA Graph timing samples.
+
+| M × K × N | TF32x3 unswizzled | TF32x3 swizzled | BF16x6 swizzled | PyTorch FP32 |
+|---|---:|---:|---:|---:|
+| 8 × 768 × 3072 | 0.123 | 0.118 | 0.047 | 0.030 |
+| 197 × 768 × 2304 | 0.340 | 0.313 | 0.129 | 0.078 |
+| 197 × 768 × 3072 | 0.429 | 0.396 | 0.168 | 0.097 |
+| 197 × 3072 × 768 | 0.593 | 0.526 | 0.215 | 0.113 |
+
+Both variants passed 33 correctness tests and the buffer reuse test under
+Racecheck, which reported zero hazards for both. TF32x3 results were bitwise
+identical before and after swizzling. For the `197 × 768 × 3072` shape,
+the Nsight shared-load bank-conflict counter dropped from 14,458,104 to 8,429
+for TF32x3. BF16x6 recorded 2,075,184 conflicts with the same swizzle.
+
+Across all shapes, BF16x6 was 2.37–2.53× as fast as swizzled TF32x3 and
+took 1.54–1.91× as long as PyTorch FP32. Its maximum absolute difference
+from PyTorch FP32 was approximately `2.14e-4`. Its RMSE against FP64 was
+lower than both TF32x3 and PyTorch FP32 on each shape in this run. These
+measurements cover GEMM accuracy on random inputs.
+[Modal run](https://modal.com/apps/ahmadsaeedzaidi/main/ap-fJOGEVT8sWDUQfZ1xAJKN1)
+
+## BF16 paired shared loads on A10
+
+The BF16 swizzle and paired loads reduced the shared-load bank-conflict
+counter from 2,075,340 to 8,789 at `197 × 768 × 3072`. Outputs matched the
+scalar BF16 build bit-for-bit on all four timed shapes. Both CuTe variants
+passed 33 correctness tests each and the buffer reuse test with zero
+Racecheck hazards.
+
+Median bias GEMM latency in microseconds from the same run:
+
+| M × K × N | BF16x6 scalar | BF16x6 paired | PyTorch FP32 |
+|---|---:|---:|---:|
+| 8 × 768 × 3072 | 47.1 | 40.6 | 30.5 |
+| 197 × 768 × 2304 | 127.7 | 114.5 | 78.1 |
+| 197 × 768 × 3072 | 167.8 | 157.3 | 103.7 |
+| 197 × 3072 × 768 | 212.6 | 196.1 | 115.3 |
+
+The paired path reduced latency by 6–14% and took 1.33–1.70× as long as
+PyTorch FP32 with TF32 disabled.
+[Modal run](https://modal.com/apps/ahmadsaeedzaidi/main/ap-VhQ7yQycWwOsm1odSkLaxn)
+
+A follow-up tried a two-warp BF16 tile for `M <= 8`. It swapped the
+operands to fit the MMA's eight-column dimension and stored directly in the
+original output layout. For `8 × 768 × 3072`, it took 40.4 µs, compared
+with 40.3 µs for the general paired kernel and 30.7 µs for PyTorch FP32.
+It passed the numerical tests and Racecheck. The general paired kernel
+remains the BF16 implementation.
+[Small M experiment](https://modal.com/apps/ahmadsaeedzaidi/main/ap-krF2DwW9RRe7lcRahkexD8)
 
 ## Enable in a CMake build
 
 ```bash
 cmake -S . -B build/cute -DVIT_CUTE_TF32=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cute --target vit_cuda_kernels -j 4
+cmake -S . -B build/cute-bf16 -DVIT_CUTE_BF16=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build/cute-bf16 --target vit_cuda_kernels -j 4
 ```
 
 With this option, CMake fetches the checksum-pinned CUTLASS v3.5.1 headers,
 selects the CuTe source instead of the original GEMM, and targets SM80/SM86.
-All operations that use the GEMM launchers, including QKV and MLP, then use
-TF32x3. Use `-DVIT_CUTE_TF32=OFF` to select the original kernel again.
+All operations that use the GEMM launchers, including QKV and MLP, use the
+selected CuTe variant. Both options default to `OFF`, which selects the
+original FP32 kernel. Enable one variant per build.
 
 References:
 

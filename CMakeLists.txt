@@ -35,7 +35,11 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 file(GLOB KERNEL_SRCS CONFIGURE_DEPENDS "csrc/kernels/*.cu")
 
 option(VIT_CUTE_TF32 "Use the experimental CuTe TF32x3 GEMM (Ampere+)" OFF)
-if(VIT_CUTE_TF32)
+option(VIT_CUTE_BF16 "Use the experimental CuTe BF16x6 GEMM (Ampere+)" OFF)
+if(VIT_CUTE_TF32 AND VIT_CUTE_BF16)
+    message(FATAL_ERROR "Choose one CuTe GEMM variant")
+endif()
+if(VIT_CUTE_TF32 OR VIT_CUTE_BF16)
     list(REMOVE_ITEM KERNEL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/gemm.cu")
 else()
     list(REMOVE_ITEM KERNEL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/gemm_cute_tf32.cu")
@@ -62,7 +66,7 @@ target_include_directories(vit_cuda_kernels PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/csrc/include>
 )
 
-if(VIT_CUTE_TF32)
+if(VIT_CUTE_TF32 OR VIT_CUTE_BF16)
     # Fetch only the headers, without configuring CUTLASS's own build/tests.
     include(FetchContent)
     if(POLICY CMP0135)
@@ -76,6 +80,9 @@ if(VIT_CUTE_TF32)
     FetchContent_MakeAvailable(cutlass_headers)
     target_include_directories(vit_cuda_kernels PRIVATE "${cutlass_headers_SOURCE_DIR}/include")
     set_property(TARGET vit_cuda_kernels PROPERTY CUDA_ARCHITECTURES "80;86")
+    if(VIT_CUTE_BF16)
+        target_compile_definitions(vit_cuda_kernels PRIVATE VIT_CUTE_USE_BF16=1)
+    endif()
 endif()
 
 target_link_libraries(vit_cuda_kernels PUBLIC

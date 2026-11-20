@@ -1,6 +1,7 @@
 """Run two tests on an A10: buffer reuse under Racecheck, then overlap A/B timing.
 
     modal run tools/modal_cute_pipeline.py
+    modal run tools/modal_cute_pipeline.py --compare
 """
 from pathlib import Path
 import subprocess
@@ -36,9 +37,15 @@ image = (
         f"nvcc {FLAGS} /repo/tools/gemm_probe.cu {BUILD}/libvit_cuda_kernels.a -o /opt/libgemm_pipeline.so",
         f"nvcc {FLAGS} -DVIT_CUTE_OVERLAP=0 /repo/tools/gemm_probe.cu /repo/csrc/kernels/gemm_cute_tf32.cu -o /opt/libgemm_immediate_wait.so",
         f"nvcc {FLAGS} /repo/tools/gemm_probe.cu /opt/gemm_cute_before_pipeline.cu -o /opt/libgemm_before.so",
+        f"nvcc {FLAGS} -DVIT_CUTE_SWIZZLE=0 /repo/tools/gemm_probe.cu /repo/csrc/kernels/gemm_cute_tf32.cu -o /opt/libgemm_unswizzled.so",
+        f"cmake -S /repo -B {BUILD}/bf16 -GNinja -DVIT_CUTE_BF16=ON -DCMAKE_BUILD_TYPE=Release -DFETCHCONTENT_SOURCE_DIR_CUTLASS_HEADERS={BUILD}/_deps/cutlass_headers-src",
+        f"cmake --build {BUILD}/bf16 --target vit_cuda_kernels -j 4",
+        f"nvcc {FLAGS} /repo/tools/gemm_probe.cu {BUILD}/bf16/libvit_cuda_kernels.a -o /opt/libgemm_bf16.so",
+        f"nvcc {FLAGS} -DVIT_CUTE_USE_BF16=1 -DVIT_CUTE_BF16_PAIRS=0 /repo/tools/gemm_probe.cu /repo/csrc/kernels/gemm_cute_tf32.cu -o /opt/libgemm_bf16_scalar.so",
     )
     .add_local_file(REPO / "tests/test_cute_gemm.py", "/repo/tests/test_cute_gemm.py")
     .add_local_file(REPO / "tests/test_cute_pipeline.py", "/repo/tests/test_cute_pipeline.py")
+    .add_local_file(REPO / "tools/compare_cute_gemm.py", "/repo/tools/compare_cute_gemm.py")
 )
 app = modal.App("vit-cute-pipeline")
 
@@ -57,7 +64,7 @@ def check():
     tests = "/repo/tests/test_cute_pipeline.py"
     subprocess.run([
         "compute-sanitizer", "--tool", "racecheck", "--error-exitcode", "1",
-        "--kernel-name", "kns=gemm_tf32x3",
+        "--kernel-name", "kns=gemm_emulated",
         sys.executable, "-m", "pytest", f"{tests}::test_double_buffer_reuse", "-q", "-s",
     ], check=True, cwd="/repo")
     subprocess.run([
@@ -69,11 +76,40 @@ def check():
     return result
 
 
+@app.function(image=image, gpu="A10", cpu=4, memory=16384, timeout=900)
+def compare_variants():
+    import json
+    import os
+    import sys
+
+    for name, library in [("TF32x3", "/opt/libgemm_pipeline.so"), ("BF16x6", "/opt/libgemm_bf16.so")]:
+        print(f"Checking {name}", flush=True)
+        env = {**os.environ, "VIT_GEMM_LIBRARY": library}
+        subprocess.run([
+            sys.executable, "-m", "pytest", "/repo/tests/test_cute_gemm.py", "-q",
+        ], check=True, cwd="/repo", env=env)
+        subprocess.run([
+            "compute-sanitizer", "--tool", "racecheck", "--error-exitcode", "1",
+            "--kernel-name", "kns=gemm_emulated", sys.executable, "-m", "pytest",
+            "/repo/tests/test_cute_pipeline.py::test_double_buffer_reuse", "-q", "-s",
+        ], check=True, cwd="/repo", env=env)
+
+    out = Path("/tmp/cute_precision_results.json")
+    subprocess.run([
+        sys.executable, "/repo/tools/compare_cute_gemm.py", "--output", str(out),
+    ], check=True, cwd="/repo")
+    return json.loads(out.read_text())
+
+
 @app.local_entrypoint()
-def main():
+def main(compare: bool = False):
     import json
 
-    result = check.remote()
-    path = REPO / "build" / "cute_pipeline_results.json"
+    if compare:
+        result = compare_variants.remote()
+        path = REPO / "build" / "cute_precision_results.json"
+    else:
+        result = check.remote()
+        path = REPO / "build" / "cute_pipeline_results.json"
     path.write_text(json.dumps(result, indent=2) + "\n")
     print(f"Results saved to {path}")

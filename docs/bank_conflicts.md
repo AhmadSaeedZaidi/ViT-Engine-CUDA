@@ -37,6 +37,7 @@
    memory so simultaneous MMA reads spread across banks. Copy destinations
    and MMA reads must use the same mapping, while preserving 16-byte copy
    alignment. Then rerun correctness checks and compare the conflict counter
-   and timings. This commit does not implement the swizzle yet.
+   and timings. See the [CuTe GEMM comparison](cute_tf32.md#double-buffering-and-overlap)
+   for how to run the swizzled variants.
 
 Reference: [NVIDIA's explanation of shared-memory banks](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/#shared-memory-and-memory-banks).
